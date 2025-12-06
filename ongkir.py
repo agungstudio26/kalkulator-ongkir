@@ -4,7 +4,7 @@ import pandas as pd
 import io
 
 # --- VERSI APLIKASI ---
-APP_VERSION = "v7.1 (Excel .xlsx Export)"
+APP_VERSION = "v7.2 (Fix Kolom Template)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
 
@@ -33,62 +33,61 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI GENERATE TEMPLATE EXCEL (.xlsx) ---
+# --- FUNGSI GENERATE TEMPLATE EXCEL (HEADER SESUAI DB) ---
 def get_template_excel():
-    # 1. Membuat Dataframe Contoh
+    # 1. Membuat Dataframe dengan NAMA KOLOM SQL (Huruf kecil semua)
+    # Ini kuncinya agar import Supabase otomatis
     data = {
-        'Province': ['Jawa Barat', 'Jawa Barat'],
-        'City': ['Kab. Bandung', 'Kota Bekasi'],
-        'Postal Code': ['40377', '17145'],
-        'dist_banjaran': [3.5, 0],
-        'dist_kopo': [15.0, 0],
-        'dist_bekasi': [0, 1.8],
-        'min_banjaran': [0, 0],
-        'min_kopo': [50000, 0],
-        'min_bekasi': [0, 0]
+        'province': ['Jawa Barat', 'Jawa Barat'],
+        'city': ['Kab. Bandung', 'Kota Bekasi'],
+        'postal_code': ['40377', '17145'],
+        # Jarak (KM)
+        'dist_banjaran': [3.5, 0],   # Jarak dari Toko Banjaran
+        'dist_kopo': [15.0, 0],      # Jarak dari Toko Kopo
+        'dist_bekasi': [0, 1.8],     # Jarak dari Toko Bekasi/Kalimalang
+        # Harga Minimum (Rp)
+        'min_banjaran': [0, 0],      # Min Charge Toko Banjaran
+        'min_kopo': [50000, 0],      # Min Charge Toko Kopo
+        'min_bekasi': [0, 0]         # Min Charge Toko Bekasi
     }
     df = pd.DataFrame(data)
     
-    # 2. Menyimpan ke Memory Buffer sebagai .xlsx
+    # 2. Export ke Excel yang Rapi
     output = io.BytesIO()
-    
-    # Menggunakan XlsxWriter agar bisa mengatur lebar kolom (Biar Rapi)
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Master Data')
         
-        # Auto-adjust lebar kolom biar kebaca semua
         workbook  = writer.book
         worksheet = writer.sheets['Master Data']
         
-        # Format Header Bold
+        # Format Header Hijau & Bold
         header_format = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
-            worksheet.set_column(col_num, col_num, 20) # Set lebar kolom jadi 20
+            worksheet.set_column(col_num, col_num, 20)
 
     return output.getvalue()
 
-# --- SIDEBAR: ADMIN TOOLS ---
+# --- SIDEBAR TOOLS ---
 with st.sidebar:
     st.title("⚙️ Admin Tools")
     st.write(f"Versi: {APP_VERSION}")
     
     st.markdown("### 1. Download Template")
-    st.caption("Download template Excel (.xlsx) yang rapi di bawah ini, isi data, lalu upload CSV-nya ke Supabase.")
+    st.caption("Header kolom di file ini sudah SAMA PERSIS dengan database. Tinggal isi data & upload.")
     
     excel_file = get_template_excel()
     
     st.download_button(
-        label="📥 Download Template Excel (.xlsx)",
+        label="📥 Download Template (.xlsx)",
         data=excel_file,
-        file_name="Template_Master_Ongkir_GEM.xlsx",
+        file_name="Template_Master_Ongkir_Fix.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     
-    st.info("ℹ️ Note: Setelah diisi di Excel, Save As CSV (Comma Delimited) sebelum upload ke Supabase.")
+    st.warning("⚠️ PENTING: Jangan ubah nama header (baris 1) di Excel agar sistem bisa membacanya.")
     
     st.markdown("---")
-    st.markdown("### 2. Reset Aplikasi")
     if st.button("🔄 Refresh Data Cache"):
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -119,6 +118,7 @@ def get_master_data():
         df_zones = pd.DataFrame(zones.data)
         
         if not df_zones.empty:
+            # Standarisasi nama kolom
             df_zones.columns = df_zones.columns.str.lower().str.strip()
 
         rates = supabase.table('master_shipping_rates').select("*").order('id').execute()
@@ -138,9 +138,9 @@ if supabase:
     # --- DEBUG VIEW ---
     with st.expander("🔍 Cek Data Database (Debug)"):
         if df_zones.empty:
-            st.warning("Data Kosong. Silakan download template di sidebar, isi, dan upload ke Supabase.")
+            st.warning("Data Kosong. Download template di sidebar, isi, Save As CSV, lalu Upload ke Supabase.")
         else:
-            st.write("5 Data Teratas:")
+            st.write(f"Total Data: {len(df_zones)} Baris")
             st.dataframe(df_zones.head())
 
     if not df_zones.empty and not df_rates.empty:
