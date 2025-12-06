@@ -4,7 +4,7 @@ import pandas as pd
 import io
 
 # --- VERSI APLIKASI ---
-APP_VERSION = "v7.2 (Fix Kolom Template)"
+APP_VERSION = "v8.0 (Service & Item Handling Fee)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
 
@@ -12,82 +12,78 @@ st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layo
 st.markdown("""
 <style>
     .metric-card {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 8px;
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
         padding: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     .big-total {
-        font-size: 32px;
+        font-size: 36px;
         font-weight: 800;
         color: #198754;
-        margin-top: 10px;
+        margin-top: 5px;
     }
-    .status-badge {
-        background-color: #e9ecef;
-        padding: 5px 10px;
-        border-radius: 4px;
+    .cost-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 15px;
+    }
+    .cost-row.total {
+        border-top: 1px dashed #ccc;
+        padding-top: 10px;
         font-weight: bold;
-        font-size: 14px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI GENERATE TEMPLATE EXCEL (HEADER SESUAI DB) ---
+# --- FUNGSI GENERATE TEMPLATE EXCEL (MULTI SHEET) ---
 def get_template_excel():
-    # 1. Membuat Dataframe dengan NAMA KOLOM SQL (Huruf kecil semua)
-    # Ini kuncinya agar import Supabase otomatis
-    data = {
-        'province': ['Jawa Barat', 'Jawa Barat'],
-        'city': ['Kab. Bandung', 'Kota Bekasi'],
-        'postal_code': ['40377', '17145'],
-        # Jarak (KM)
-        'dist_banjaran': [3.5, 0],   # Jarak dari Toko Banjaran
-        'dist_kopo': [15.0, 0],      # Jarak dari Toko Kopo
-        'dist_bekasi': [0, 1.8],     # Jarak dari Toko Bekasi/Kalimalang
-        # Harga Minimum (Rp)
-        'min_banjaran': [0, 0],      # Min Charge Toko Banjaran
-        'min_kopo': [50000, 0],      # Min Charge Toko Kopo
-        'min_bekasi': [0, 0]         # Min Charge Toko Bekasi
-    }
-    df = pd.DataFrame(data)
-    
-    # 2. Export ke Excel yang Rapi
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Master Data')
+        # SHEET 1: ZONA (Ongkir Jarak)
+        df_zones = pd.DataFrame({
+            'province': ['Jawa Barat'], 'city': ['Kab. Bandung'], 'postal_code': ['40377'],
+            'dist_banjaran': [3.5], 'dist_kopo': [15.0], 'dist_bekasi': [0],
+            'min_banjaran': [0], 'min_kopo': [50000], 'min_bekasi': [0]
+        })
+        df_zones.to_excel(writer, index=False, sheet_name='Zones')
         
-        workbook  = writer.book
-        worksheet = writer.sheets['Master Data']
-        
-        # Format Header Hijau & Bold
-        header_format = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-            worksheet.set_column(col_num, col_num, 20)
+        # SHEET 2: BARANG (Handling Fee)
+        df_rates = pd.DataFrame({
+            'kategori_produk': ['Kulkas Side by Side', 'TV 43 Inch'],
+            'bobot_kategori': ['Big', 'Medium'],
+            'tarif_per_km': [15000, 10000],
+            'handling_fee': [50000, 0] # Biaya tambahan per unit
+        })
+        df_rates.to_excel(writer, index=False, sheet_name='Products')
 
+        # SHEET 3: LAYANAN (Service Fee)
+        df_services = pd.DataFrame({
+            'service_name': ['Nextday Delivery', 'Lite Install', 'Trade In'],
+            'service_fee': [0, 50000, 25000]
+        })
+        df_services.to_excel(writer, index=False, sheet_name='Services')
+        
     return output.getvalue()
 
 # --- SIDEBAR TOOLS ---
 with st.sidebar:
     st.title("⚙️ Admin Tools")
-    st.write(f"Versi: {APP_VERSION}")
+    st.caption(f"Ver: {APP_VERSION}")
     
-    st.markdown("### 1. Download Template")
-    st.caption("Header kolom di file ini sudah SAMA PERSIS dengan database. Tinggal isi data & upload.")
-    
+    # Download Template
     excel_file = get_template_excel()
-    
     st.download_button(
-        label="📥 Download Template (.xlsx)",
+        label="📥 Download Template Full (.xlsx)",
         data=excel_file,
-        file_name="Template_Master_Ongkir_Fix.xlsx",
+        file_name="Template_Master_Ongkir_v8.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Berisi 3 Sheet: Zones, Products, Services"
     )
+    st.caption("Gunakan template ini untuk mengisi ulang database jika perlu.")
     
-    st.warning("⚠️ PENTING: Jangan ubah nama header (baris 1) di Excel agar sistem bisa membacanya.")
-    
-    st.markdown("---")
     if st.button("🔄 Refresh Data Cache"):
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -100,7 +96,6 @@ def init_connection():
         if "supabase" not in st.secrets:
             st.error("Secrets belum disetting.")
             st.stop()
-        
         url = st.secrets["supabase"]["url"].strip()
         key = st.secrets["supabase"]["key"].strip()
         return create_client(url, key)
@@ -114,187 +109,202 @@ supabase = init_connection()
 @st.cache_data(ttl=600)
 def get_master_data():
     try:
+        # 1. Zones
         zones = supabase.table('master_shipping_zones').select("*").execute()
         df_zones = pd.DataFrame(zones.data)
-        
-        if not df_zones.empty:
-            # Standarisasi nama kolom
-            df_zones.columns = df_zones.columns.str.lower().str.strip()
+        if not df_zones.empty: df_zones.columns = df_zones.columns.str.lower().str.strip()
 
+        # 2. Rates (Barang)
         rates = supabase.table('master_shipping_rates').select("*").order('id').execute()
         df_rates = pd.DataFrame(rates.data)
+
+        # 3. Services (Layanan)
+        services = supabase.table('master_services').select("*").order('id').execute()
+        df_services = pd.DataFrame(services.data)
         
-        return df_zones, df_rates
+        return df_zones, df_rates, df_services
     except Exception as e:
         st.error(f"Gagal memuat data: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # --- UI UTAMA ---
 st.title("🚛 Kalkulator - Biaya Kirim GEM")
 
 if supabase:
-    df_zones, df_rates = get_master_data()
+    df_zones, df_rates, df_services = get_master_data()
 
-    # --- DEBUG VIEW ---
-    with st.expander("🔍 Cek Data Database (Debug)"):
-        if df_zones.empty:
-            st.warning("Data Kosong. Download template di sidebar, isi, Save As CSV, lalu Upload ke Supabase.")
-        else:
-            st.write(f"Total Data: {len(df_zones)} Baris")
-            st.dataframe(df_zones.head())
-
-    if not df_zones.empty and not df_rates.empty:
+    if not df_zones.empty:
         
+        # === FORM INPUT ===
         with st.container():
-            col1, col2, col3 = st.columns([1.5, 1.5, 1])
+            c1, c2, c3 = st.columns([1.2, 1.2, 1])
             
             # 1. TOKO
-            with col1:
-                st.subheader("1. Toko Pengirim")
+            with c1:
+                st.subheader("1. Asal Toko")
                 store_config = {
-                    "Banjaran": {"label": "Blibli Elektronik - Banjaran", "col_dist": "dist_banjaran", "col_min": "min_banjaran", "free_km": 7.0},
-                    "Kopo": {"label": "Blibli Elektronik - Kopo", "col_dist": "dist_kopo", "col_min": "min_kopo", "free_km": 7.0},
-                    "Bekasi": {"label": "Dekoruma - Kalimalang", "col_dist": "dist_bekasi", "col_min": "min_bekasi", "free_km": 10.0}
+                    "Banjaran": {"label": "Blibli - Banjaran", "col_dist": "dist_banjaran", "col_min": "min_banjaran", "free_km": 7.0},
+                    "Kopo": {"label": "Blibli - Kopo", "col_dist": "dist_kopo", "col_min": "min_kopo", "free_km": 7.0},
+                    "Bekasi": {"label": "Dekoruma - Bekasi", "col_dist": "dist_bekasi", "col_min": "min_bekasi", "free_km": 10.0}
                 }
-                
-                selected_store_key = st.selectbox(
-                    "Pilih Asal Toko:", 
-                    options=list(store_config.keys()),
-                    format_func=lambda x: store_config[x]["label"],
-                    index=0
-                )
-                current_store = store_config[selected_store_key]
-                st.info(f"ℹ️ Gratis Ongkir: **{current_store['free_km']} KM** pertama.")
+                store_key = st.selectbox("Pilih Toko:", list(store_config.keys()), format_func=lambda x: store_config[x]["label"], index=0)
+                curr_store = store_config[store_key]
+                st.caption(f"Free Radius: {curr_store['free_km']} KM")
 
             # 2. ALAMAT
-            with col2:
-                st.subheader("2. Alamat Tujuan")
-                
-                # Filter Jabar
+            with c2:
+                st.subheader("2. Tujuan")
+                # Filter Provinsi Jabar (Optional logic)
+                df_target = df_zones
                 if 'province' in df_zones.columns:
-                    df_jabar = df_zones[df_zones['province'].astype(str).str.contains('jawa barat', case=False, na=False)]
-                    df_target = df_jabar if not df_jabar.empty else df_zones
-                else:
-                    df_target = df_zones
+                     df_jabar = df_zones[df_zones['province'].astype(str).str.contains('jawa barat', case=False, na=False)]
+                     if not df_jabar.empty: df_target = df_jabar
 
                 cities = sorted(df_target['city'].dropna().unique())
-                selected_city = st.selectbox("Pilih Kota / Kabupaten:", cities)
+                city = st.selectbox("Kota/Kab:", cities)
 
-                selected_zip_label = None
-                if selected_city:
-                    city_data = df_target[df_target['city'] == selected_city].copy()
-                    dist_col = current_store['col_dist']
-                    
-                    if dist_col in city_data.columns:
-                        city_data[dist_col] = city_data[dist_col].fillna(0)
-                        city_data = city_data.sort_values('postal_code')
-                        
-                        zone_options = city_data.apply(
-                            lambda x: f"{x['postal_code']} (Jarak: {float(x[dist_col]):.2f} km)", axis=1
-                        ).tolist()
-                        selected_zip_label = st.selectbox("Pilih Kode Pos:", zone_options)
-                    else:
-                        st.error(f"Kolom '{dist_col}' hilang. Gunakan template admin.")
+                zip_label = None
+                if city:
+                    city_df = df_target[df_target['city'] == city].copy()
+                    dist_col = curr_store['col_dist']
+                    if dist_col in city_df.columns:
+                        city_df[dist_col] = city_df[dist_col].fillna(0)
+                        city_df = city_df.sort_values('postal_code')
+                        opts = city_df.apply(lambda x: f"{x['postal_code']} ({float(x[dist_col]):.1f} km)", axis=1).tolist()
+                        zip_label = st.selectbox("Kode Pos:", opts)
 
-            # 3. LAYANAN
-            with col3:
+            # 3. LAYANAN (DARI DATABASE)
+            with c3:
                 st.subheader("3. Layanan")
-                st.selectbox("Tipe Pengiriman:", ["Nextday Delivery", "Trade In Delivery", "Lite Install Delivery"])
-
-        # PROCESS
-        jarak_real = 0
-        min_charge_val = 0
-        if selected_zip_label and selected_city:
-            zip_code = selected_zip_label.split(" (")[0]
-            match = df_target[(df_target['city'] == selected_city) & (df_target['postal_code'] == zip_code)]
-            
-            if not match.empty:
-                row = match.iloc[0]
-                jarak_real = float(row[current_store['col_dist']])
-                min_col = current_store['col_min']
-                if min_col in row and pd.notna(row[min_col]):
-                    min_charge_val = float(row[min_col])
+                # Dropdown ambil dari tabel master_services
+                if not df_services.empty:
+                    service_opts = df_services['service_name'].tolist()
+                    selected_service_name = st.selectbox("Tipe:", service_opts)
+                    
+                    # Ambil Biaya Layanan
+                    service_row = df_services[df_services['service_name'] == selected_service_name].iloc[0]
+                    service_fee = float(service_row['service_fee'])
+                else:
+                    st.warning("Data layanan kosong")
+                    service_fee = 0
 
         st.divider()
 
-        # 4. INPUT BARANG
-        col_input, col_result = st.columns([2, 1.2])
-        with col_input:
-            st.subheader("4. Input QTY Barang")
-            if 'edited_df' not in st.session_state:
-                df_input = df_rates[['kategori_produk', 'bobot_kategori']].copy()
-                df_input['QTY'] = 0
-                df_input['Rate/KM'] = df_rates['tarif_per_km']
-            else:
-                df_input = df_rates[['kategori_produk', 'bobot_kategori']].copy()
-                df_input['QTY'] = 0 
-                df_input['Rate/KM'] = df_rates['tarif_per_km']
+        # === INPUT BARANG ===
+        c_input, c_result = st.columns([1.8, 1.2])
+        
+        with c_input:
+            st.subheader("4. Barang")
+            if 'df_cart' not in st.session_state:
+                # Prepare input DF
+                d = df_rates[['kategori_produk', 'bobot_kategori', 'tarif_per_km', 'handling_fee']].copy()
+                d['QTY'] = 0
+                st.session_state['df_cart'] = d
+            
+            # Reset logic basic
+            df_input = st.session_state['df_cart']
 
             edited_df = st.data_editor(
                 df_input,
                 column_config={
                     "kategori_produk": "Item",
-                    "bobot_kategori": "Tipe",
-                    "Rate/KM": st.column_config.NumberColumn("Rate/KM", format="Rp %d"),
-                    "QTY": st.column_config.NumberColumn("Jml", min_value=0, max_value=100, step=1)
+                    "bobot_kategori": "Type",
+                    "tarif_per_km": st.column_config.NumberColumn("Rate/KM", format="Rp %d"),
+                    "handling_fee": st.column_config.NumberColumn("Extra Fee/Unit", format="Rp %d", help="Biaya angkut/pasang per barang"),
+                    "QTY": st.column_config.NumberColumn("Jml", min_value=0, max_value=50, step=1)
                 },
-                disabled=["kategori_produk", "bobot_kategori", "Rate/KM"],
+                disabled=["kategori_produk", "bobot_kategori", "tarif_per_km", "handling_fee"],
                 hide_index=True,
                 use_container_width=True
             )
 
-        # 5. HASIL
-        with col_result:
+        # === KALKULASI TOTAL ===
+        with c_result:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.subheader("📝 Rincian Biaya")
-            
-            items_selected = edited_df[edited_df['QTY'] > 0]
-            final_ongkir = 0
-            note = "-"
-            detail = ""
+            st.subheader("🧾 Rincian Biaya")
 
-            if not items_selected.empty:
-                merged = pd.merge(items_selected, df_rates, on='kategori_produk', how='left')
-                max_rate = merged['tarif_per_km_y'].max()
-                free_limit = current_store['free_km']
+            # 1. Parsing Jarak
+            jarak_real = 0
+            min_charge = 0
+            if zip_label and city:
+                code = zip_label.split(" (")[0]
+                row = df_target[(df_target['city']==city) & (df_target['postal_code']==code)].iloc[0]
+                jarak_real = float(row[curr_store['col_dist']])
+                if pd.notna(row[curr_store['col_min']]):
+                    min_charge = float(row[curr_store['col_min']])
+
+            # 2. Hitung Item
+            cart = edited_df[edited_df['QTY'] > 0]
+            
+            ongkir_jarak = 0
+            total_handling = 0
+            ongkir_final = 0
+            
+            if not cart.empty:
+                # A. Ongkir Jarak (Ambil Rate Tertinggi)
+                max_rate = cart['tarif_per_km'].max()
                 
-                if jarak_real <= free_limit:
-                    final_ongkir = 0
-                    note = f"✅ FREE (< {free_limit} KM)"
-                    detail = f"Jarak {jarak_real} KM masuk gratis ongkir."
+                if jarak_real <= curr_store['free_km']:
+                    ongkir_jarak = 0
+                    note_jarak = "Gratis (Radius)"
                 else:
-                    jarak_bayar = jarak_real - free_limit
-                    biaya_km = jarak_bayar * max_rate
-                    
-                    if min_charge_val > 0 and min_charge_val > biaya_km:
-                        final_ongkir = min_charge_val
-                        note = "📦 MINIMUM CHARGE"
-                        detail = f"Menggunakan standar minimum zona."
+                    dist_pay = jarak_real - curr_store['free_km']
+                    ongkir_jarak = dist_pay * max_rate
+                    # Cek Min Charge
+                    if min_charge > 0 and min_charge > ongkir_jarak:
+                        ongkir_jarak = min_charge
+                        note_jarak = "Min. Charge Zone"
                     else:
-                        final_ongkir = biaya_km
-                        note = "🛣️ CHARGE PER-KM"
-                        detail = f"Lebih {jarak_bayar:.1f} KM x Rate Rp {max_rate:,.0f}"
+                        note_jarak = f"{dist_pay:.1f} KM x Rate"
 
-            c1, c2 = st.columns(2)
-            c1.metric("Jarak", f"{jarak_real} KM")
-            c2.metric("Min. Charge", f"Rp {min_charge_val:,.0f}")
-            
-            st.divider()
-            
-            if not items_selected.empty:
-                st.markdown(f"**Metode:** <span class='status-badge'>{note}</span>", unsafe_allow_html=True)
-                st.caption(detail)
+                # B. Handling Fee Barang (Total QTY * Fee per Item)
+                # Rumus: Sum(QTY * handling_fee)
+                cart['subtotal_handling'] = cart['QTY'] * cart['handling_fee']
+                total_handling = cart['subtotal_handling'].sum()
                 
-                st.markdown("### TOTAL")
-                if final_ongkir == 0:
-                    st.markdown('<div class="big-total">GRATIS (Rp 0)</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="big-total">Rp {final_ongkir:,.0f}</div>', unsafe_allow_html=True)
+                # C. Total Final
+                ongkir_final = ongkir_jarak + service_fee + total_handling
+
+                # --- DISPLAY ---
+                st.markdown(f"""
+                <div class="cost-row">
+                    <span>Jarak ({jarak_real} km)</span>
+                    <span>Rp {ongkir_jarak:,.0f}</span>
+                </div>
+                <div style="font-size:12px; color:grey; margin-top:-5px; margin-bottom:10px;">Metode: {note_jarak}</div>
+                
+                <div class="cost-row">
+                    <span>Biaya Layanan ({selected_service_name})</span>
+                    <span>Rp {service_fee:,.0f}</span>
+                </div>
+                
+                <div class="cost-row">
+                    <span>Extra Handling Barang</span>
+                    <span>Rp {total_handling:,.0f}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.divider()
+                
+                st.markdown(f"""
+                <div class="cost-row total">
+                    <span>TOTAL ESTIMASI</span>
+                </div>
+                <div class="big-total">Rp {ongkir_final:,.0f}</div>
+                """, unsafe_allow_html=True)
+
             else:
-                st.warning("Isi QTY barang dulu.")
-            st.markdown('</div>', unsafe_allow_html=True)
+                st.info("👈 Masukkan jumlah barang di tabel samping.")
+                st.markdown(f"""
+                <div class="cost-row">
+                    <span>Jarak Tempuh</span>
+                    <span>{jarak_real} KM</span>
+                </div>
+                """, unsafe_allow_html=True)
             
+            st.markdown('</div>', unsafe_allow_html=True)
+
     else:
-        st.warning("Database Kosong. Silakan download template di Sidebar.")
+        st.warning("Database Kosong. Silakan Import Template.")
 else:
-    st.error("Database Error.")
+    st.error("Gagal Koneksi DB")
