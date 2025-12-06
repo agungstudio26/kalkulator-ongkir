@@ -1,9 +1,10 @@
 import streamlit as st
-from supabase import create_client
+from supabase import create_client, Client
 import pandas as pd
 import io
 
 # --- VERSI APLIKASI ---
+# Ditandai sesuai permintaan
 APP_VERSION = "v8.0 (Service & Item Handling Fee)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
