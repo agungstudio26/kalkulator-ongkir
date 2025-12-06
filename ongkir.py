@@ -4,7 +4,7 @@ import pandas as pd
 import io
 
 # --- VERSI APLIKASI ---
-APP_VERSION = "v7.0 (Fitur Download Template)"
+APP_VERSION = "v7.1 (Excel .xlsx Export)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
 
@@ -33,12 +33,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI GENERATE TEMPLATE ---
-def get_template_csv():
-    # Membuat Dataframe Kosong dengan Header yang Benar
+# --- FUNGSI GENERATE TEMPLATE EXCEL (.xlsx) ---
+def get_template_excel():
+    # 1. Membuat Dataframe Contoh
     data = {
-        'Province': ['Jawa Barat', 'Jawa Barat (Contoh)'],
-        'City': ['Kab. Bandung', 'Kota Bekasi (Contoh)'],
+        'Province': ['Jawa Barat', 'Jawa Barat'],
+        'City': ['Kab. Bandung', 'Kota Bekasi'],
         'Postal Code': ['40377', '17145'],
         'dist_banjaran': [3.5, 0],
         'dist_kopo': [15.0, 0],
@@ -48,7 +48,25 @@ def get_template_csv():
         'min_bekasi': [0, 0]
     }
     df = pd.DataFrame(data)
-    return df.to_csv(index=False).encode('utf-8')
+    
+    # 2. Menyimpan ke Memory Buffer sebagai .xlsx
+    output = io.BytesIO()
+    
+    # Menggunakan XlsxWriter agar bisa mengatur lebar kolom (Biar Rapi)
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Master Data')
+        
+        # Auto-adjust lebar kolom biar kebaca semua
+        workbook  = writer.book
+        worksheet = writer.sheets['Master Data']
+        
+        # Format Header Bold
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+            worksheet.set_column(col_num, col_num, 20) # Set lebar kolom jadi 20
+
+    return output.getvalue()
 
 # --- SIDEBAR: ADMIN TOOLS ---
 with st.sidebar:
@@ -56,16 +74,20 @@ with st.sidebar:
     st.write(f"Versi: {APP_VERSION}")
     
     st.markdown("### 1. Download Template")
-    st.caption("Download file ini, buka di Excel, isi data, lalu upload ke Supabase.")
+    st.caption("Download template Excel (.xlsx) yang rapi di bawah ini, isi data, lalu upload CSV-nya ke Supabase.")
     
-    csv_file = get_template_csv()
+    excel_file = get_template_excel()
+    
     st.download_button(
-        label="📥 Download Template CSV",
-        data=csv_file,
-        file_name="Template_Master_Ongkir_GEM.csv",
-        mime="text/csv",
+        label="📥 Download Template Excel (.xlsx)",
+        data=excel_file,
+        file_name="Template_Master_Ongkir_GEM.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     
+    st.info("ℹ️ Note: Setelah diisi di Excel, Save As CSV (Comma Delimited) sebelum upload ke Supabase.")
+    
+    st.markdown("---")
     st.markdown("### 2. Reset Aplikasi")
     if st.button("🔄 Refresh Data Cache"):
         st.cache_data.clear()
