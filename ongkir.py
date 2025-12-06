@@ -3,26 +3,31 @@ from supabase import create_client
 import pandas as pd
 
 # --- VERSI APLIKASI ---
-APP_VERSION = "v3.0 (Excel Dashboard UI)"
+APP_VERSION = "v4.0 (Logic Hybrid Excel)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
 
-# --- CUSTOM CSS (Agar mirip Excel) ---
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
     .metric-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 15px;
-        border: 1px solid #d1d5db;
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
     }
     .big-total {
-        font-size: 28px;
-        font-weight: bold;
-        color: #0f5132;
+        font-size: 32px;
+        font-weight: 800;
+        color: #198754;
+        margin-top: 10px;
     }
-    div[data-testid="stMetricValue"] {
-        font-size: 18px;
+    .status-badge {
+        background-color: #e9ecef;
+        padding: 5px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 14px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -48,11 +53,9 @@ supabase = init_connection()
 @st.cache_data(ttl=600)
 def get_master_data():
     try:
-        # Ambil Zones
         zones = supabase.table('master_shipping_zones').select("*").execute()
         df_zones = pd.DataFrame(zones.data)
         
-        # Ambil Rates Barang
         rates = supabase.table('master_shipping_rates').select("*").order('id').execute()
         df_rates = pd.DataFrame(rates.data)
         
@@ -63,191 +66,179 @@ def get_master_data():
 
 # --- UI UTAMA ---
 st.title("🚛 Kalkulator - Biaya Kirim GEM")
-st.caption(f"Versi Aplikasi: {APP_VERSION}")
+st.caption(f"System Version: {APP_VERSION} | Logic Reference: Kalkulator Ship Cost 10 Oct 2025.xlsx")
 
 if supabase:
     df_zones, df_rates = get_master_data()
 
     if not df_zones.empty and not df_rates.empty:
         
-        # --- BAGIAN 1: HEADER & CONFIG (TOKO & ALAMAT) ---
-        # Mirip bagian atas Excel
+        # === BAGIAN 1: KONFIGURASI PENGIRIMAN ===
         with st.container():
-            col_toko, col_alamat, col_tipe = st.columns([1.5, 1.5, 1])
+            col1, col2, col3 = st.columns([1.5, 1.5, 1])
             
-            with col_toko:
+            with col1:
                 st.subheader("1. Toko Pengirim")
-                store_map = {
-                    "dist_banjaran": "Blibli Elektronik - Banjaran Bandung",
-                    "dist_kopo": "Blibli Elektronik - Kopo Bandung",
-                    "dist_kalimalang": "Dekoruma Elektronik - Kalimalang Bekasi"
-                }
-                # Mapping untuk kolom Min Charge
-                min_charge_map = {
-                    "dist_banjaran": "min_charge_banjaran",
-                    "dist_kopo": "min_charge_kopo",
-                    "dist_kalimalang": "min_charge_kalimalang"
+                # Mapping Toko ke Kolom DB & Aturan Radius
+                store_config = {
+                    "Kopo": {"col_dist": "dist_kopo", "col_min": "min_kopo", "free_km": 7.0, "label": "Blibli Elektronik - Kopo Bandung"},
+                    "Banjaran": {"col_dist": "dist_banjaran", "col_min": "min_banjaran", "free_km": 7.0, "label": "Blibli Elektronik - Banjaran Bandung"},
+                    "Bekasi": {"col_dist": "dist_kalimalang", "col_min": "min_kalimalang", "free_km": 10.0, "label": "Dekoruma Elektronik - Kalimalang Bekasi"}
                 }
                 
-                selected_store_key = st.selectbox(
-                    "Pilih Toko Asal:", 
-                    options=list(store_map.keys()), 
-                    format_func=lambda x: store_map[x]
+                selected_store_code = st.selectbox(
+                    "Pilih Asal Toko:", 
+                    options=list(store_config.keys()),
+                    format_func=lambda x: store_config[x]["label"]
                 )
+                
+                # Ambil konfigurasi toko terpilih
+                current_store = store_config[selected_store_code]
+                st.info(f"ℹ️ Toko ini Gratis Ongkir **{current_store['free_km']} KM** pertama.")
 
-            with col_alamat:
-                st.subheader("2. Alamat Pengiriman")
-                # Filter Kota
+            with col2:
+                st.subheader("2. Alamat Tujuan")
                 cities = sorted(df_zones['city'].unique())
                 selected_city = st.selectbox("Kota / Kabupaten:", cities)
 
                 # Filter Kode Pos
                 filtered_zones = df_zones[df_zones['city'] == selected_city]
                 
-                # Handle null distance values with 0
-                filtered_zones[selected_store_key] = filtered_zones[selected_store_key].fillna(0)
+                # Format Dropdown: "KodePos (Jarak KM)"
+                # Handle null/NaN dengan 0
+                dist_col = current_store['col_dist']
+                filtered_zones[dist_col] = filtered_zones[dist_col].fillna(0)
                 
-                # Dropdown Kode Pos
                 zone_options = filtered_zones.apply(
-                    lambda x: f"{x['postal_code']} (Dist: {x[selected_store_key]} km)", axis=1
+                    lambda x: f"{x['postal_code']} (Jarak: {x[dist_col]} km)", axis=1
                 ).tolist()
                 
-                selected_zip_label = st.selectbox("Kode Pos Tujuan:", zone_options)
+                selected_zip_label = st.selectbox("Kode Pos:", zone_options)
 
-            with col_tipe:
-                st.subheader("3. Tipe Pengiriman")
-                # Ini ada di Excel, kita tambahkan sebagai statis dulu atau logic nanti
-                st.selectbox("Tipe:", ["Trade In Delivery", "Regular Delivery", "Instant"])
+            with col3:
+                st.subheader("3. Layanan")
+                st.selectbox("Tipe Pengiriman:", ["Regular Delivery", "Next Day", "Trade In"])
 
-        # --- DATA PROCESSING UNTUK LOGIC ---
-        # Ambil detail zona yang dipilih
+        # === DATA PROCESSING ===
         if selected_zip_label:
             selected_zip = selected_zip_label.split(" (")[0]
             zone_data = filtered_zones[filtered_zones['postal_code'] == selected_zip].iloc[0]
             
-            jarak_real = float(zone_data[selected_store_key])
-            col_min_charge = min_charge_map[selected_store_key]
-            min_charge_val = float(zone_data[col_min_charge]) if col_min_charge in zone_data else 0
-            zone_name = zone_data['zone_name'] if 'zone_name' in zone_data else "-"
+            jarak_real = float(zone_data[current_store['col_dist']])
+            
+            # Ambil Min Charge (Handle jika kolom null)
+            min_col = current_store['col_min']
+            min_charge_val = float(zone_data[min_col]) if min_col in zone_data and pd.notna(zone_data[min_col]) else 0
         else:
             jarak_real = 0
             min_charge_val = 0
-            zone_name = "-"
 
         st.divider()
 
-        # --- BAGIAN 2: TABEL INPUT BARANG (MENGGANTIKAN MULTISELECT) ---
-        col_table, col_summary = st.columns([2, 1])
+        # === BAGIAN 2: INPUT BARANG (TABLE EDITOR) ===
+        col_input, col_result = st.columns([2, 1.2])
 
-        with col_table:
-            st.subheader("4. Rincian Barang (Isi QTY)")
+        with col_input:
+            st.subheader("4. Input QTY Barang")
             
-            # Siapkan Dataframe untuk diedit user (Mirip Excel Grid)
-            # Kita tambah kolom 'QTY' default 0
             if 'edited_df' not in st.session_state:
                 df_input = df_rates[['kategori_produk', 'bobot_kategori']].copy()
                 df_input['QTY'] = 0
-                df_input['Keterangan'] = df_rates['tarif_per_km'].apply(lambda x: f"Rate: {x:,.0f}/km")
+                df_input['Estimasi Rate'] = df_rates['tarif_per_km']
             else:
                 df_input = df_rates[['kategori_produk', 'bobot_kategori']].copy()
-                df_input['QTY'] = 0 # Reset visual logic handled by editor below
-                df_input['Keterangan'] = df_rates['tarif_per_km'].apply(lambda x: f"Rate: {x:,.0f}/km")
+                df_input['QTY'] = 0 
+                df_input['Estimasi Rate'] = df_rates['tarif_per_km']
 
-            # Tampilkan Tabel Editable
             edited_df = st.data_editor(
                 df_input,
                 column_config={
-                    "kategori_produk": "Kategori Produk",
-                    "bobot_kategori": "Bobot",
-                    "QTY": st.column_config.NumberColumn("QTY", min_value=0, max_value=100, step=1, format="%d"),
-                    "Keterangan": "Info Rate"
+                    "kategori_produk": "Item Name",
+                    "bobot_kategori": "Type",
+                    "Estimasi Rate": st.column_config.NumberColumn("Rate/KM", format="Rp %d"),
+                    "QTY": st.column_config.NumberColumn("QTY", min_value=0, max_value=100, step=1)
                 },
-                disabled=["kategori_produk", "bobot_kategori", "Keterangan"],
+                disabled=["kategori_produk", "bobot_kategori", "Estimasi Rate"],
                 hide_index=True,
                 use_container_width=True,
-                key="item_editor"
+                height=400
             )
 
-        # --- LOGIC HITUNG (REALTIME) ---
-        # 1. Cek barang apa saja yang QTY > 0
-        items_selected_rows = edited_df[edited_df['QTY'] > 0]
-        has_items = not items_selected_rows.empty
-
-        final_ongkir = 0
-        status_msg = "Menunggu Input Barang..."
-        detail_msg = ""
-        kendaraan_info = ""
-
-        if has_items:
-            # Ambil item dari master rates yang cocok dengan input user
-            # Kita perlu join ulang dengan master rate untuk dapat angkanya
-            merged_selection = pd.merge(
-                items_selected_rows, 
-                df_rates, 
-                on='kategori_produk', 
-                how='left',
-                suffixes=('', '_master')
-            )
-            
-            # CARI MAX RATE (Logic Toko: Satu truk ikut harga barang termahal/terbesar)
-            max_rate_val = merged_selection['tarif_per_km'].max()
-            
-            # Hitung Ongkir
-            batas_gratis = 7.0
-            
-            if jarak_real <= batas_gratis:
-                final_ongkir = 0
-                status_msg = "FREE SHIPPING"
-                detail_msg = f"Jarak {jarak_real} KM (Di bawah {batas_gratis} KM)"
-            else:
-                jarak_bayar = jarak_real - batas_gratis
-                biaya_km = jarak_bayar * max_rate_val
-                
-                # Bandingkan dengan Min Charge Excel
-                if min_charge_val > 0 and min_charge_val > biaya_km:
-                    final_ongkir = min_charge_val
-                    status_msg = "MINIMUM CHARGE ZONE"
-                    detail_msg = f"Menggunakan Min. Charge Zona {zone_name}"
-                else:
-                    final_ongkir = biaya_km
-                    status_msg = "DISTANCE CHARGE"
-                    detail_msg = f"Lebih {jarak_bayar:.1f} KM x Rp {max_rate_val:,.0f}"
-
-        # --- BAGIAN 3: DASHBOARD HASIL (SEBELAH KANAN) ---
-        with col_summary:
+        # === BAGIAN 3: LOGIC HITUNG EXCEL ===
+        with col_result:
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.subheader("Ringkasan Biaya")
+            st.subheader("📝 Rincian Biaya")
             
-            # Baris Info Jarak & Zona
-            c1, c2 = st.columns(2)
-            c1.metric("Jarak", f"{jarak_real} KM")
-            c2.metric("Zona", f"{zone_name}")
+            # 1. Cek Barang Terpilih
+            items_selected = edited_df[edited_df['QTY'] > 0]
+            has_items = not items_selected.empty
+            
+            final_ongkir = 0
+            logic_note = "-"
+            calculation_detail = ""
+
+            if has_items:
+                # Ambil Rate Tertinggi (Max Vehicle Logic)
+                # Join balik ke master untuk memastikan data akurat
+                merged = pd.merge(items_selected, df_rates, on='kategori_produk', how='left')
+                max_rate = merged['tarif_per_km_y'].max() # tarif_per_km_y dari master
+                
+                free_limit = current_store['free_km']
+                
+                # LOGIKA UTAMA (Sesuai Excel)
+                if jarak_real <= free_limit:
+                    # KONDISI 1: DALAM RADIUS GRATIS
+                    final_ongkir = 0
+                    logic_note = f"✅ FREE (Radius < {free_limit} KM)"
+                    calculation_detail = f"Jarak {jarak_real} KM masih di bawah batas gratis."
+                else:
+                    # KONDISI 2: DI LUAR RADIUS
+                    jarak_bayar = jarak_real - free_limit
+                    biaya_km = jarak_bayar * max_rate
+                    
+                    # Cek Minimum Charge Database
+                    if min_charge_val > 0:
+                        # Logic: Ambil yang TERBESAR (Max of Calculated vs MinCharge)
+                        # Agar mengcover biaya operasional zona jauh
+                        if min_charge_val > biaya_km:
+                            final_ongkir = min_charge_val
+                            logic_note = "📦 MINIMUM CHARGE ZONA"
+                            calculation_detail = f"Biaya hitung KM (Rp {biaya_km:,.0f}) lebih kecil dari Min. Charge Zona (Rp {min_charge_val:,.0f})."
+                        else:
+                            final_ongkir = biaya_km
+                            logic_note = "🛣️ CHARGE BY KM"
+                            calculation_detail = f"Lebih {jarak_bayar:.1f} KM x Rate Rp {max_rate:,.0f}"
+                    else:
+                        # Jika tidak ada data min charge, pakai hitungan KM murni
+                        final_ongkir = biaya_km
+                        logic_note = "🛣️ CHARGE BY KM"
+                        calculation_detail = f"Lebih {jarak_bayar:.1f} KM x Rate Rp {max_rate:,.0f}"
+
+            # UI DISPLAY HASIL
+            col_a, col_b = st.columns(2)
+            col_a.metric("Jarak Tempuh", f"{jarak_real} KM")
+            col_a.caption(f"Batas Gratis: {current_store['free_km']} KM")
+            
+            col_b.metric("Min. Charge DB", f"Rp {min_charge_val:,.0f}")
+            col_b.caption("Data Excel ShipTable")
             
             st.divider()
-            
-            # Baris Minimum Charge Info
-            st.caption(f"Min. Charge (Excel): Rp {min_charge_val:,.0f}")
             
             if has_items:
-                st.write(f"**Status:** {status_msg}")
-                st.caption(detail_msg)
-            else:
-                st.warning("Silakan isi QTY barang.")
-
-            st.divider()
-            
-            # Total Besar
-            st.markdown("### Total Biaya Kirim")
-            if final_ongkir == 0 and has_items:
-                st.markdown('<p class="big-total" style="color:green;">GRATIS (Rp 0)</p>', unsafe_allow_html=True)
-            elif final_ongkir > 0:
-                st.markdown(f'<p class="big-total" style="color:orange;">Rp {final_ongkir:,.0f}</p>', unsafe_allow_html=True)
-            else:
-                st.markdown('<p class="big-total">-</p>', unsafe_allow_html=True)
+                st.markdown(f"**Metode:** <span class='status-badge'>{logic_note}</span>", unsafe_allow_html=True)
+                st.caption(calculation_detail)
                 
+                st.markdown("### TOTAL BAYAR")
+                if final_ongkir == 0:
+                    st.markdown('<div class="big-total">GRATIS (Rp 0)</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="big-total">Rp {final_ongkir:,.0f}</div>', unsafe_allow_html=True)
+            else:
+                st.warning("⚠️ Silakan isi QTY barang di tabel sebelah kiri.")
+            
             st.markdown('</div>', unsafe_allow_html=True)
 
     else:
-        st.warning("Database Kosong. Mohon import data CSV.")
+        st.error("Database kosong. Mohon jalankan script SQL yang baru.")
 else:
     st.error("Gagal koneksi database.")
