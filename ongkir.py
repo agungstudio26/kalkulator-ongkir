@@ -3,7 +3,7 @@ from supabase import create_client
 import pandas as pd
 
 # --- VERSI APLIKASI ---
-APP_VERSION = "v4.1 (Cascading Dropdown)"
+APP_VERSION = "v5.0 (Banjaran Focus & Jabar Filter)"
 
 st.set_page_config(page_title="Kalkulator Ship Cost GEM", page_icon="🚛", layout="wide")
 
@@ -68,7 +68,7 @@ def get_master_data():
 
 # --- UI UTAMA ---
 st.title("🚛 Kalkulator - Biaya Kirim GEM")
-st.caption(f"System Version: {APP_VERSION} | Logic Reference: Kalkulator Ship Cost 10 Oct 2025.xlsx")
+st.caption(f"System Version: {APP_VERSION} | Focus: Toko Banjaran")
 
 if supabase:
     df_zones, df_rates = get_master_data()
@@ -79,38 +79,48 @@ if supabase:
         with st.container():
             col1, col2, col3 = st.columns([1.5, 1.5, 1])
             
-            # --- KOLOM 1: TOKO ---
+            # --- KOLOM 1: TOKO (DEFAULT BANJARAN) ---
             with col1:
                 st.subheader("1. Toko Pengirim")
                 store_config = {
-                    "Kopo": {"col_dist": "dist_kopo", "col_min": "min_kopo", "free_km": 7.0, "label": "Blibli Elektronik - Kopo Bandung"},
                     "Banjaran": {"col_dist": "dist_banjaran", "col_min": "min_banjaran", "free_km": 7.0, "label": "Blibli Elektronik - Banjaran Bandung"},
+                    "Kopo": {"col_dist": "dist_kopo", "col_min": "min_kopo", "free_km": 7.0, "label": "Blibli Elektronik - Kopo Bandung"},
                     "Bekasi": {"col_dist": "dist_kalimalang", "col_min": "min_kalimalang", "free_km": 10.0, "label": "Dekoruma Elektronik - Kalimalang Bekasi"}
                 }
                 
+                # Kita set index 0 agar defaultnya Banjaran (karena list key pertama adalah Banjaran)
                 selected_store_code = st.selectbox(
                     "Pilih Asal Toko:", 
                     options=list(store_config.keys()),
-                    format_func=lambda x: store_config[x]["label"]
+                    format_func=lambda x: store_config[x]["label"],
+                    index=0 
                 )
                 
                 current_store = store_config[selected_store_code]
-                st.info(f"ℹ️ Gratis Ongkir: **{current_store['free_km']} KM** pertama.")
+                st.info(f"ℹ️ Toko ini Gratis Ongkir **{current_store['free_km']} KM** pertama.")
 
-            # --- KOLOM 2: ALAMAT (CASCADING FILTER) ---
+            # --- KOLOM 2: ALAMAT (FILTER JAWA BARAT) ---
             with col2:
                 st.subheader("2. Alamat Tujuan")
                 
-                # A. PILIH KOTA (Unique Values)
-                # Sortir nama kota agar A-Z
-                if 'city' in df_zones.columns:
-                    cities = sorted(df_zones['city'].dropna().unique())
-                    selected_city = st.selectbox("Pilih Kota / Kabupaten:", cities)
+                # A. FILTER JAWA BARAT
+                if 'province' in df_zones.columns and 'city' in df_zones.columns:
+                    # Filter hanya Provinsi Jawa Barat (Case insensitive safe)
+                    df_jabar = df_zones[df_zones['province'].astype(str).str.contains('Jawa Barat', case=False, na=False)]
+                    
+                    if df_jabar.empty:
+                        st.warning("Data Provinsi 'Jawa Barat' tidak ditemukan di database.")
+                        cities = []
+                    else:
+                        cities = sorted(df_jabar['city'].dropna().unique())
                 else:
-                    st.error("Kolom 'city' tidak ditemukan di database.")
-                    selected_city = None
+                    st.error("Kolom 'province' atau 'city' tidak ditemukan di tabel database.")
+                    cities = []
 
-                # B. FILTER KODE POS BERDASARKAN KOTA
+                # B. PILIH KOTA
+                selected_city = st.selectbox("Pilih Kota / Kabupaten (Jawa Barat):", cities)
+
+                # C. FILTER KODE POS BERDASARKAN KOTA
                 if selected_city:
                     # Filter dataframe hanya untuk kota yang dipilih
                     filtered_zones = df_zones[df_zones['city'] == selected_city].copy()
@@ -131,23 +141,25 @@ if supabase:
                         st.warning(f"Tidak ada data kode pos untuk {selected_city}")
                         selected_zip_label = None
                     else:
+                        # Dropdown Kode Pos (Munculkan semua yang ada di kota tersebut)
                         selected_zip_label = st.selectbox("Pilih Kode Pos:", zone_options)
                 else:
                     selected_zip_label = None
 
-            # --- KOLOM 3: LAYANAN ---
+            # --- KOLOM 3: LAYANAN (UPDATED) ---
             with col3:
                 st.subheader("3. Layanan")
-                st.selectbox("Tipe Pengiriman:", ["Regular Delivery", "Next Day", "Trade In"])
+                st.selectbox(
+                    "Tipe Pengiriman:", 
+                    ["Nextday Delivery", "Trade In Delivery", "Lite Install Delivery"]
+                )
 
         # === DATA PROCESSING ===
         if selected_zip_label and selected_city:
-            # Ambil kembali data detail berdasarkan Kode Pos yang dipilih
-            # Kita split label "40229 (Jarak...)" untuk dapat kode pos murni
+            # Ambil kembali data detail
             selected_zip_code = selected_zip_label.split(" (")[0]
             
-            # Ambil baris data yang cocok (Kota + Kode Pos)
-            # Menggunakan .loc untuk keamanan
+            # Cari baris yang tepat (Kota + Kode Pos)
             zone_match = filtered_zones[filtered_zones['postal_code'] == selected_zip_code]
             
             if not zone_match.empty:
@@ -172,7 +184,6 @@ if supabase:
         with col_input:
             st.subheader("4. Input QTY Barang")
             
-            # Setup struktur tabel input
             if 'edited_df' not in st.session_state:
                 df_input = df_rates[['kategori_produk', 'bobot_kategori']].copy()
                 df_input['QTY'] = 0
