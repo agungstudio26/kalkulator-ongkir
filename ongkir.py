@@ -4,7 +4,7 @@ import pandas as pd
 import io
 
 # --- CONFIG & VERSION ---
-APP_VERSION = "v9.2 (Fitur Download CSV Bersih)"
+APP_VERSION = "v9.3 (Debug Mode: Cek Koneksi)"
 st.set_page_config(page_title="Kalkulator Ongkir GEM", layout="wide")
 
 # --- CSS ---
@@ -20,7 +20,6 @@ st.markdown("""
 @st.cache_resource
 def init_connection():
     try:
-        # Support variable secrets lama atau baru
         if "SUPABASE_URL" in st.secrets:
             url = st.secrets["SUPABASE_URL"]
             key = st.secrets["SUPABASE_KEY"]
@@ -34,29 +33,24 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- FUNGSI SMART CLEANING (PENTING) ---
+# --- FUNGSI SMART CLEANING ---
 def clean_and_fix_data(df_raw):
-    """
-    Memisahkan data 'ZONE 1' (Teks) dari Harga (Angka) agar Supabase tidak menolak.
-    """
     df_raw.columns = df_raw.columns.str.strip().str.lower()
     clean_data = []
     
-    # Progress UI
-    progress_text = "Operation in progress. Please wait."
+    progress_text = "Sedang membersihkan data..."
     my_bar = st.progress(0, text=progress_text)
     total_len = len(df_raw)
 
     for index, row in df_raw.iterrows():
-        # Update progress
         if index % 50 == 0:
-            my_bar.progress(min(index/total_len, 1.0), text=f"Memproses baris {index} dari {total_len}")
+            my_bar.progress(min(index/total_len, 1.0))
 
-        # 1. Ambil Data Lokasi
+        # 1. Lokasi
         city = row.get('city', '')
         postal = str(row.get('postal_code', '')).replace('.0', '').strip()
         
-        # 2. Ambil Jarak (Paksa jadi Float, kalau error jadi 0)
+        # 2. Jarak
         def to_float(val):
             try: return float(val)
             except: return 0.0
@@ -65,16 +59,12 @@ def clean_and_fix_data(df_raw):
         d_kopo = to_float(row.get('dist_kopo', row.get('distance from blibli elektronik - kopo bandung', 0)))
         d_bekasi = to_float(row.get('dist_kalimalang', row.get('distance from dekoruma elektronik - kalimalang bekasi', 0)))
 
-        # 3. SMART SPLIT: ZONE vs MIN CHARGE
-        # Fungsi ini yang menyelamatkan data Bapak dari error Supabase
+        # 3. Smart Split Zone
         def split_zone_price(val):
             val_str = str(val).upper().strip()
-            if "ZONE" in val_str:
-                return val_str, 0.0 # Jika isinya "ZONE 1", Harganya 0
-            else:
-                return "ZONE 2", to_float(val) # Jika Angka, Zonanya Default, Harganya sesuai angka
+            if "ZONE" in val_str: return val_str, 0.0
+            else: return "ZONE 2", to_float(val)
 
-        # Cek 3 Kolom Min Charge (Bisa jadi header CSV Bapak masih nama panjang)
         raw_ban = row.get('min_banjaran', row.get('minimum charge blibli elektronik - banjaran bandung', 0))
         z_ban, p_ban = split_zone_price(raw_ban)
         
@@ -84,18 +74,12 @@ def clean_and_fix_data(df_raw):
         raw_bek = row.get('min_kalimalang', row.get('minimum charge dekoruma elektronik - kalimalang bekasi', 0))
         z_bek, p_bek = split_zone_price(raw_bek)
         
-        # Logic Final Zone
         final_zone = "ZONE 1" if (z_ban == "ZONE 1" or z_kop == "ZONE 1" or z_bek == "ZONE 1") else "ZONE 2"
 
         clean_data.append({
-            "city": city,
-            "postal_code": postal,
-            "dist_banjaran": d_banjaran,
-            "dist_kopo": d_kopo,
-            "dist_kalimalang": d_bekasi,
-            "min_charge_banjaran": p_ban,
-            "min_charge_kopo": p_kop,
-            "min_charge_kalimalang": p_bek,
+            "city": city, "postal_code": postal,
+            "dist_banjaran": d_banjaran, "dist_kopo": d_kopo, "dist_kalimalang": d_bekasi,
+            "min_charge_banjaran": p_ban, "min_charge_kopo": p_kop, "min_charge_kalimalang": p_bek,
             "zone_category": final_zone
         })
         
@@ -107,68 +91,49 @@ with st.sidebar:
     st.title("⚙️ Admin Tools")
     st.caption(f"Ver: {APP_VERSION}")
     
-    st.markdown("### 1. Fix Data Error (Zone vs Harga)")
-    st.info("Upload CSV yang ditolak Supabase di sini. Sistem akan memisahkan 'ZONE 1' dari Angka Rupiah.")
-    
+    # INDIKATOR STATUS DATA (PENTING)
+    if supabase:
+        try:
+            count_loc = supabase.table('shipping_rates').select('*', count='exact', head=True).execute().count
+            st.metric("Total Data Lokasi", count_loc)
+            if count_loc == 0:
+                st.error("Data Kosong! Harap Upload CSV.")
+        except Exception as e:
+            st.error(f"Gagal Cek Data: {e}")
+
+    st.markdown("---")
+    st.markdown("### 1. Fix & Upload Data")
     upl_file = st.file_uploader("Upload CSV Asli", type=['csv'])
     
     if upl_file:
         df_dirty = pd.read_csv(upl_file)
-        
-        if st.button("🚀 Proses Pembersihan Data"):
-            # Proses Cleaning
-            df_clean = clean_and_fix_data(df_dirty)
-            
-            # Simpan ke Session State biar gak ilang
-            st.session_state['df_clean'] = df_clean
-            st.success("Data berhasil dibersihkan! Silakan pilih metode upload di bawah.")
+        if st.button("🚀 Bersihkan Data"):
+            st.session_state['df_clean'] = clean_and_fix_data(df_dirty)
+            st.success("Siap Upload!")
 
-        # Jika sudah ada data bersih, tampilkan opsi
         if 'df_clean' in st.session_state:
             df_final = st.session_state['df_clean']
-            st.write(f"Total Baris Bersih: {len(df_final)}")
             
-            # OPSI A: Upload Otomatis
-            if st.button("⬆️ Upload Langsung ke Database"):
+            # Opsi A: Upload Otomatis
+            if st.button("⬆️ Upload ke Database"):
                 try:
-                    # Hapus data lama (biar gak duplikat)
                     supabase.table('shipping_rates').delete().neq("id", 0).execute()
-                    
-                    # Insert Batching
                     data_dict = df_final.to_dict(orient='records')
                     batch_size = 100
-                    
-                    prog_text = "Uploading to Cloud..."
-                    bar_up = st.progress(0, text=prog_text)
-                    
+                    prog = st.progress(0)
                     for i in range(0, len(data_dict), batch_size):
-                        batch = data_dict[i:i+batch_size]
-                        supabase.table('shipping_rates').insert(batch).execute()
-                        bar_up.progress(min(i/len(data_dict), 1.0))
-                        
-                    bar_up.empty()
-                    st.success("✅ BERHASIL! Data sudah masuk Database.")
+                        supabase.table('shipping_rates').insert(data_dict[i:i+batch_size]).execute()
+                        prog.progress(min(i/len(data_dict), 1.0))
+                    prog.empty()
+                    st.success("✅ Berhasil Upload!")
                     st.cache_data.clear()
-                    
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Gagal Upload Otomatis: {e}")
-                    st.warning("Coba gunakan Opsi B di bawah.")
+                    st.error(f"Gagal: {e}")
 
-            # OPSI B: Download Manual (Solusi Paling Ampuh)
-            st.markdown("---")
-            st.write("**Opsi B (Manual):** Download file bersih ini, lalu Import 'via CSV' di Dashboard Supabase.")
-            
+            # Opsi B: Download Manual
             csv_buffer = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download CSV Bersih",
-                data=csv_buffer,
-                file_name="Shipping_Rates_Cleaned_Ready.csv",
-                mime="text/csv"
-            )
-
-    st.markdown("---")
-    if st.button("🔄 Refresh Aplikasi"):
-        st.rerun()
+            st.download_button("📥 Download CSV Bersih", csv_buffer, "clean_data.csv", "text/csv")
 
 # --- UI UTAMA ---
 st.title("🚛 Kalkulator Biaya Kirim GEM")
@@ -180,11 +145,20 @@ c1, c2, c3 = st.columns(3)
 with c1:
     gudang = st.selectbox("Toko Asal", ["Blibli - Kopo", "Blibli - Banjaran", "Dekoruma - Kalimalang"])
 with c2:
+    # DEBUGGING DROPDOWN
     try:
         res = supabase.table('shipping_rates').select('city, postal_code').execute()
-        opts = sorted(list(set([f"{r['city']} - {r['postal_code']}" for r in res.data]))) if res.data else []
-        dest = st.selectbox("Tujuan", opts) if opts else st.selectbox("Tujuan", ["Data Kosong"])
-    except: dest = ""
+        if res.data:
+            opts = sorted(list(set([f"{r['city']} - {r['postal_code']}" for r in res.data])))
+            dest = st.selectbox("Tujuan", opts)
+        else:
+            st.warning("⚠️ Data Lokasi Kosong.")
+            dest = ""
+    except Exception as e:
+        st.error(f"Error Database: {e}")
+        st.caption("Tips: Cek apakah RLS sudah dimatikan di Supabase?")
+        dest = ""
+
 with c3:
     service = st.selectbox("Layanan", ["Nextday Delivery", "Trade In Delivery", "Lite Install Delivery"])
 
@@ -209,11 +183,9 @@ if st.button("Hitung", type="primary", use_container_width=True):
         st.error("Data belum lengkap.")
         st.stop()
         
-    # Logic
     code = dest.split(" - ")[1]
     loc = supabase.table('shipping_rates').select('*').eq('postal_code', code).execute().data[0]
     
-    # Init Param
     dist, min_chg, free_lim = 0,0,0
     if "Kopo" in gudang:
         dist = float(loc['dist_kopo'] or 0)
