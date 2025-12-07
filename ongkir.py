@@ -4,14 +4,15 @@ import pandas as pd
 import io
 
 # --- CONFIG & VERSION ---
-APP_VERSION = "v9.3 (Debug Mode: Cek Koneksi)"
+APP_VERSION = "v9.4 (Diagnosa & Auto-Fix)"
 st.set_page_config(page_title="Kalkulator Ongkir GEM", layout="wide")
 
-# --- CSS ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .big-font { font-size:24px !important; font-weight: bold; } 
     .success-font { font-size:24px !important; font-weight: bold; color: green; }
+    .warning-box { background-color: #fff3cd; padding: 15px; border-radius: 5px; border: 1px solid #ffeeba; }
     .stNumberInput input { text-align: center; }
 </style>
 """, unsafe_allow_html=True)
@@ -20,6 +21,7 @@ st.markdown("""
 @st.cache_resource
 def init_connection():
     try:
+        # Support variable secrets lama atau baru
         if "SUPABASE_URL" in st.secrets:
             url = st.secrets["SUPABASE_URL"]
             key = st.secrets["SUPABASE_KEY"]
@@ -28,17 +30,17 @@ def init_connection():
             key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Koneksi Gagal: {e}")
         return None
 
 supabase = init_connection()
 
-# --- FUNGSI SMART CLEANING ---
+# --- FUNGSI PEMBERSIH DATA (SUPER ROBUST) ---
 def clean_and_fix_data(df_raw):
-    df_raw.columns = df_raw.columns.str.strip().str.lower()
-    clean_data = []
+    # Standarisasi Header: Hapus spasi, lowercase, ganti simbol aneh
+    df_raw.columns = df_raw.columns.str.strip().str.lower().str.replace('\n', ' ').str.replace('.', '')
     
-    progress_text = "Sedang membersihkan data..."
+    clean_data = []
+    progress_text = "Sedang memperbaiki format data..."
     my_bar = st.progress(0, text=progress_text)
     total_len = len(df_raw)
 
@@ -46,34 +48,46 @@ def clean_and_fix_data(df_raw):
         if index % 50 == 0:
             my_bar.progress(min(index/total_len, 1.0))
 
-        # 1. Lokasi
-        city = row.get('city', '')
-        postal = str(row.get('postal_code', '')).replace('.0', '').strip()
+        # 1. Cari Kolom Kota & Kode Pos (Fuzzy Search Sederhana)
+        city = row.get('city', row.get('kota', row.get('kabupaten', '')))
+        postal = str(row.get('postal_code', row.get('kode pos', row.get('postal code', '')))).replace('.0', '').strip()
         
-        # 2. Jarak
+        # Jika kode pos kosong, skip baris ini (data sampah)
+        if not postal or postal == 'nan':
+            continue
+
+        # 2. Fungsi Aman Konversi Angka
         def to_float(val):
             try: return float(val)
             except: return 0.0
             
-        d_banjaran = to_float(row.get('dist_banjaran', row.get('distance from blibli elektronik - banjaran bandung', 0)))
-        d_kopo = to_float(row.get('dist_kopo', row.get('distance from blibli elektronik - kopo bandung', 0)))
-        d_bekasi = to_float(row.get('dist_kalimalang', row.get('distance from dekoruma elektronik - kalimalang bekasi', 0)))
+        # Cari kolom jarak dengan berbagai kemungkinan nama
+        d_banjaran = 0
+        d_kopo = 0
+        d_bekasi = 0
+        
+        for col in df_raw.columns:
+            if 'banjaran' in col and 'dist' in col: d_banjaran = to_float(row[col])
+            if 'kopo' in col and 'dist' in col: d_kopo = to_float(row[col])
+            if ('kalimalang' in col or 'bekasi' in col) and 'dist' in col: d_bekasi = to_float(row[col])
 
-        # 3. Smart Split Zone
+        # 3. Smart Split Zone vs Price
         def split_zone_price(val):
             val_str = str(val).upper().strip()
             if "ZONE" in val_str: return val_str, 0.0
             else: return "ZONE 2", to_float(val)
 
-        raw_ban = row.get('min_banjaran', row.get('minimum charge blibli elektronik - banjaran bandung', 0))
-        z_ban, p_ban = split_zone_price(raw_ban)
-        
-        raw_kop = row.get('min_kopo', row.get('minimum charge blibli elektronik - kopo bandung', 0))
-        z_kop, p_kop = split_zone_price(raw_kop)
-        
-        raw_bek = row.get('min_kalimalang', row.get('minimum charge dekoruma elektronik - kalimalang bekasi', 0))
-        z_bek, p_bek = split_zone_price(raw_bek)
-        
+        p_ban, p_kop, p_bek = 0, 0, 0
+        z_ban, z_kop, z_bek = "ZONE 2", "ZONE 2", "ZONE 2"
+
+        for col in df_raw.columns:
+            if 'min' in col and 'charge' in col:
+                z_temp, p_temp = split_zone_price(row[col])
+                if 'banjaran' in col: z_ban, p_ban = z_temp, p_temp
+                if 'kopo' in col: z_kop, p_kop = z_temp, p_temp
+                if 'kalimalang' in col or 'bekasi' in col: z_bek, p_bek = z_temp, p_temp
+
+        # Logic Final Zone
         final_zone = "ZONE 1" if (z_ban == "ZONE 1" or z_kop == "ZONE 1" or z_bek == "ZONE 1") else "ZONE 2"
 
         clean_data.append({
@@ -88,36 +102,47 @@ def clean_and_fix_data(df_raw):
 
 # --- SIDEBAR TOOLS ---
 with st.sidebar:
-    st.title("⚙️ Admin Tools")
+    st.title("⚙️ Admin Panel")
     st.caption(f"Ver: {APP_VERSION}")
     
-    # INDIKATOR STATUS DATA (PENTING)
+    # STATUS DATABASE
     if supabase:
         try:
-            count_loc = supabase.table('shipping_rates').select('*', count='exact', head=True).execute().count
-            st.metric("Total Data Lokasi", count_loc)
+            count_res = supabase.table('shipping_rates').select('*', count='exact', head=True).execute()
+            count_loc = count_res.count
+            st.metric("Total Data Database", f"{count_loc} Baris")
+            
             if count_loc == 0:
-                st.error("Data Kosong! Harap Upload CSV.")
-        except Exception as e:
-            st.error(f"Gagal Cek Data: {e}")
+                st.error("DATABASE KOSONG!")
+                st.markdown("👉 **Wajib Upload Data di bawah ini**")
+            else:
+                st.success("Database Aktif ✅")
+                if st.button("🗑️ Hapus Semua Data (Reset)"):
+                    supabase.table('shipping_rates').delete().neq("id", 0).execute()
+                    st.warning("Data dihapus.")
+                    st.rerun()
+        except:
+            st.error("Gagal koneksi. Cek RLS!")
 
     st.markdown("---")
-    st.markdown("### 1. Fix & Upload Data")
-    upl_file = st.file_uploader("Upload CSV Asli", type=['csv'])
+    st.markdown("### 🔧 Perbaiki & Upload Data")
+    upl_file = st.file_uploader("Upload CSV Excel", type=['csv'])
     
     if upl_file:
         df_dirty = pd.read_csv(upl_file)
-        if st.button("🚀 Bersihkan Data"):
+        if st.button("1. Bersihkan Data"):
             st.session_state['df_clean'] = clean_and_fix_data(df_dirty)
-            st.success("Siap Upload!")
+            st.success("Data Siap!")
 
         if 'df_clean' in st.session_state:
             df_final = st.session_state['df_clean']
+            st.write(f"Data Bersih: {len(df_final)} Baris")
             
-            # Opsi A: Upload Otomatis
-            if st.button("⬆️ Upload ke Database"):
+            if st.button("2. 🚀 UPLOAD KE DATABASE"):
                 try:
+                    # Hapus lama
                     supabase.table('shipping_rates').delete().neq("id", 0).execute()
+                    # Upload baru (Batch)
                     data_dict = df_final.to_dict(orient='records')
                     batch_size = 100
                     prog = st.progress(0)
@@ -125,39 +150,51 @@ with st.sidebar:
                         supabase.table('shipping_rates').insert(data_dict[i:i+batch_size]).execute()
                         prog.progress(min(i/len(data_dict), 1.0))
                     prog.empty()
-                    st.success("✅ Berhasil Upload!")
+                    st.success("✅ BERHASIL MASUK DATABASE!")
                     st.cache_data.clear()
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Gagal: {e}")
-
-            # Opsi B: Download Manual
-            csv_buffer = df_final.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download CSV Bersih", csv_buffer, "clean_data.csv", "text/csv")
+                    st.error(f"Gagal Upload: {e}")
 
 # --- UI UTAMA ---
 st.title("🚛 Kalkulator Biaya Kirim GEM")
 
-if not supabase: st.stop()
+if not supabase:
+    st.error("Koneksi Database Gagal. Cek secrets.toml")
+    st.stop()
+
+# --- DIAGNOSA AWAL ---
+# Cek apakah data lokasi ada
+try:
+    loc_check = supabase.table('shipping_rates').select('city').limit(1).execute()
+    if not loc_check.data:
+        st.markdown("""
+        <div class="warning-box">
+            <h3>⚠️ Database Lokasi Masih Kosong</h3>
+            <p>Dropdown Tujuan tidak akan muncul karena belum ada data.</p>
+            <ol>
+                <li>Buka Sidebar (panah kiri atas)</li>
+                <li>Upload file CSV Anda di menu 'Admin Panel'</li>
+                <li>Klik tombol 'Bersihkan Data' lalu 'UPLOAD KE DATABASE'</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop() # Berhenti di sini agar user fix dulu
+except Exception as e:
+    st.error(f"Error Database (RLS Mungkin Aktif): {e}")
+    st.stop()
 
 # --- INPUT SECTION ---
 c1, c2, c3 = st.columns(3)
 with c1:
     gudang = st.selectbox("Toko Asal", ["Blibli - Kopo", "Blibli - Banjaran", "Dekoruma - Kalimalang"])
+
 with c2:
-    # DEBUGGING DROPDOWN
-    try:
-        res = supabase.table('shipping_rates').select('city, postal_code').execute()
-        if res.data:
-            opts = sorted(list(set([f"{r['city']} - {r['postal_code']}" for r in res.data])))
-            dest = st.selectbox("Tujuan", opts)
-        else:
-            st.warning("⚠️ Data Lokasi Kosong.")
-            dest = ""
-    except Exception as e:
-        st.error(f"Error Database: {e}")
-        st.caption("Tips: Cek apakah RLS sudah dimatikan di Supabase?")
-        dest = ""
+    # Ambil Data Lokasi
+    res = supabase.table('shipping_rates').select('city, postal_code').execute()
+    # Buat format "Kota - Kode Pos" dan Sortir
+    opts = sorted(list(set([f"{r['city']} - {r['postal_code']}" for r in res.data])))
+    dest = st.selectbox("Tujuan Pengiriman", opts)
 
 with c3:
     service = st.selectbox("Layanan", ["Nextday Delivery", "Trade In Delivery", "Lite Install Delivery"])
@@ -165,9 +202,13 @@ with c3:
 st.markdown("---")
 st.subheader("📦 Barang")
 
+# Cek Data Barang
 try:
     items = supabase.table('item_shipping_rates').select('*').order('id').execute().data
 except: items = []
+
+if not items:
+    st.warning("⚠️ Data Barang Kosong. Upload pakai template admin.")
 
 cart = {}
 if items:
@@ -178,11 +219,15 @@ if items:
             if q > 0: cart[it['category_name']] = {'qty': q, 'rates': it}
 
 st.markdown("---")
-if st.button("Hitung", type="primary", use_container_width=True):
-    if not dest or not cart:
-        st.error("Data belum lengkap.")
+if st.button("Hitung Estimasi", type="primary", use_container_width=True):
+    if not dest:
+        st.error("Pilih Tujuan dulu.")
+        st.stop()
+    if not cart:
+        st.error("Pilih Barang dulu.")
         st.stop()
         
+    # Logic Hitung
     code = dest.split(" - ")[1]
     loc = supabase.table('shipping_rates').select('*').eq('postal_code', code).execute().data[0]
     
@@ -203,7 +248,7 @@ if st.button("Hitung", type="primary", use_container_width=True):
     is_free = dist <= free_lim
     zone = loc.get('zone_category', 'ZONE 2')
     
-    total_item_cost = 0
+    total_cost = 0
     rows = []
     valid = True
     err = ""
@@ -213,15 +258,15 @@ if st.button("Hitung", type="primary", use_container_width=True):
         price = 0
         if service == "Nextday Delivery": price = float(r['nextday_rate'] or 0)
         elif service == "Trade In Delivery":
-            if "ZONE 1" not in str(zone).upper(): valid, err = False, f"Trade In hanya ZONE 1. (Lokasi: {zone})"; break
+            if "ZONE 1" not in str(zone).upper(): valid, err = False, f"Trade In hanya ZONE 1 (Lokasi: {zone})"; break
             price = float(r['tradein_rate'] or 0)
         elif service == "Lite Install Delivery":
-            if "ZONE 1" not in str(zone).upper(): valid, err = False, f"Install hanya ZONE 1. (Lokasi: {zone})"; break
-            if not r['lite_install_rate']: valid, err = False, f"{name} tidak bisa diinstall."; break
+            if "ZONE 1" not in str(zone).upper(): valid, err = False, f"Install hanya ZONE 1 (Lokasi: {zone})"; break
+            if not r['lite_install_rate']: valid, err = False, f"{name} tidak bisa install."; break
             price = float(r['lite_install_rate'])
             
         sub = price * q
-        total_item_cost += sub
+        total_cost += sub
         rows.append({"Barang": name, "Qty": q, "Harga": f"{price:,.0f}", "Subtotal": f"{sub:,.0f}"})
         
     st.info(f"📍 Jarak: {dist} km | Zona: {zone} | Min Charge: Rp {min_chg:,.0f}")
@@ -230,8 +275,8 @@ if st.button("Hitung", type="primary", use_container_width=True):
     else:
         st.table(pd.DataFrame(rows))
         if is_free:
-            st.success("🎉 FREE SHIPPING")
+            st.success("🎉 FREE SHIPPING (Masuk Radius)")
         else:
-            final = max(total_item_cost, min_chg)
+            final = max(total_cost, min_chg)
             lbl = "(Min Charge)" if final == min_chg else "(Total Barang)"
             st.markdown(f"### Total: Rp {final:,.0f} {lbl}")
